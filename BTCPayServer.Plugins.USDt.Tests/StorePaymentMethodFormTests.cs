@@ -330,6 +330,94 @@ public class StorePaymentMethodFormTests
         Assert.Contains("No addresses were added", (await host.GetPage(chain)).Body!.TextContent);
     }
 
+    [Theory]
+    [InlineData("ETHEREUM", true)]
+    [InlineData("ETHEREUM", false)]
+    [InlineData("POLYGON", true)]
+    [InlineData("POLYGON", false)]
+    [InlineData("BSC", true)]
+    [InlineData("BSC", false)]
+    [InlineData("TRON", true)]
+    [InlineData("TRON", false)]
+    public async Task EmptyLegacyEntriesCanBeRemovedWithoutChangingSettings(string chain, bool enabled)
+    {
+        using var host = await FormHost.Create();
+        var settings = SaveForm(await host.GetPage(chain));
+        ((IHtmlInputElement)settings.QuerySelector("#Enabled")!).IsChecked = enabled;
+        ((IHtmlSelectElement)settings.QuerySelector("#PaymentLinkFormat")!).Value = "3";
+        ((IHtmlTextAreaElement)settings.QuerySelector("#PaymentLinkTemplate")!).Value = "wallet:{to}";
+        using var saved = await host.Submit(settings);
+        Assert.Equal(HttpStatusCode.Redirect, saved.StatusCode);
+
+        var address = FormHost.Address(chain);
+        string[] retained = [address, address, "invalid-address", " " + address + " "];
+        await host.SetAddresses(chain, [null!, "", " \t\r\n", "\u00a0", .. retained], activated: false);
+        var before = await host.ReadStore();
+        var page = await host.GetPage(chain);
+        Assert.Equal(before.DerivationStrategies, (await host.ReadStore()).DerivationStrategies);
+        var cleanup = page.QuerySelector("form[action$='/addresses/delete-empty']");
+        Assert.NotNull(cleanup);
+        Assert.Contains("Remove empty entries", cleanup.TextContent);
+        using var removed = await host.Submit(cleanup, new()
+        {
+            ["Enabled"] = "bogus", ["PaymentLinkFormat"] = "999",
+            ["PaymentLinkTemplate"] = "changed", ["Address"] = "another-address"
+        });
+        Assert.Equal(HttpStatusCode.Redirect, removed.StatusCode);
+        var after = await host.ReadStore();
+        Assert.Equal(before.StoreBlob, after.StoreBlob);
+        foreach (var configuredChain in new[] { "ETHEREUM", "POLYGON", "BSC", "TRON" })
+        {
+            var expected = JObject.FromObject(host.Config(before, configuredChain));
+            if (configuredChain == chain) expected[nameof(USDtPaymentMethodConfig.Addresses)] = JArray.FromObject(retained);
+            Assert.True(JToken.DeepEquals(expected, JObject.FromObject(host.Config(after, configuredChain))));
+        }
+        Assert.Null((await host.GetPage(chain)).QuerySelector("form[action$='/addresses/delete-empty']"));
+    }
+
+    [Theory]
+    [InlineData("ETHEREUM")]
+    [InlineData("TRON")]
+    public async Task EmptyOnlyLegacyPoolCanBeCleanedAndRepeatedSafely(string chain)
+    {
+        using var host = await FormHost.Create();
+        await host.SetAddresses(chain, [null!, "", " \t\r\n"]);
+        var page = await host.GetPage(chain);
+        var cleanup = page.QuerySelector("form[action$='/addresses/delete-empty']");
+        Assert.NotNull(cleanup);
+        Assert.Empty(page.QuerySelectorAll("#StoreUsersList tr"));
+        Assert.Null(page.QuerySelector(".alert-danger"));
+        using var removed = await host.Submit(cleanup);
+        Assert.Equal(HttpStatusCode.Redirect, removed.StatusCode);
+        var after = await host.ReadStore();
+        Assert.Empty(host.Config(after, chain).Addresses);
+        Assert.True(host.Config(after, chain).Activated);
+        Assert.Contains("Please add at least one", (await host.GetPage(chain)).Body!.TextContent);
+        using var repeated = await host.Submit(cleanup);
+        Assert.Equal(HttpStatusCode.Redirect, repeated.StatusCode);
+        var repeatedStore = await host.ReadStore();
+        Assert.Equal(after.StoreBlob, repeatedStore.StoreBlob);
+        Assert.Equal(after.DerivationStrategies, repeatedStore.DerivationStrategies);
+    }
+
+    [Theory]
+    [InlineData("ETHEREUM")]
+    [InlineData("TRON")]
+    public async Task EmptyAddressCleanupRequiresAntiforgery(string chain)
+    {
+        using var host = await FormHost.Create();
+        await host.SetAddresses(chain, [null!, "", FormHost.Address(chain)]);
+        var before = await host.ReadStore();
+        var cleanup = (await host.GetPage(chain)).QuerySelector("form[action$='/addresses/delete-empty']");
+        Assert.NotNull(cleanup);
+        cleanup.QuerySelector("[name=__RequestVerificationToken]")!.Remove();
+        using var rejected = await host.Submit(cleanup);
+        Assert.Equal(HttpStatusCode.BadRequest, rejected.StatusCode);
+        var after = await host.ReadStore();
+        Assert.Equal(before.StoreBlob, after.StoreBlob);
+        Assert.Equal(before.DerivationStrategies, after.DerivationStrategies);
+    }
+
     [Fact]
     public async Task TronApiCanReadLegacyDuplicateAddresses()
     {
@@ -469,12 +557,13 @@ public class StorePaymentMethodFormTests
             return await db.Stores.SingleAsync(store => store.Id == StoreId);
         }
 
-        public async Task SetAddresses(string chain, string[] addresses)
+        public async Task SetAddresses(string chain, string[] addresses, bool? activated = null)
         {
             using var db = _database.CreateContext();
             var store = await db.Stores.SingleAsync(store => store.Id == StoreId);
             var config = Config(store, chain);
             config.Addresses = addresses;
+            if (activated is { } value) config.Activated = value;
             store.SetPaymentMethodConfig(Handlers[Id(chain)], config);
             await db.SaveChangesAsync();
         }

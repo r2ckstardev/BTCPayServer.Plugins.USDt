@@ -87,7 +87,9 @@ public class UIEVMUSDtLikeStoreController(
                     .ToString(CultureInfo.InvariantCulture)
             });
 
-        var addresses = (matchedPaymentMethodConfig.Addresses ?? [])
+        var savedAddresses = matchedPaymentMethodConfig.Addresses ?? [];
+        var addresses = savedAddresses
+            .Where(address => !string.IsNullOrWhiteSpace(address))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         var balances = await evmUsdTRpcProvider.GetBalances(paymentMethodId, addresses);
@@ -108,6 +110,7 @@ public class UIEVMUSDtLikeStoreController(
             TemplatePreviewChainId = config.ChainId.ToString(CultureInfo.InvariantCulture),
             TemplatePreviewAmountUnits = USDtPaymentLinkFormats.ToBaseUnits(12.34m, config.Divisibility)
                 .ToString(CultureInfo.InvariantCulture),
+            EmptyAddressCount = savedAddresses.Count(string.IsNullOrWhiteSpace),
             Addresses = addresses.Select(s =>
                 new EditEVMUSDtPaymentMethodViewModel.EditEVMUSDtPaymentMethodAddressViewModel
                 {
@@ -118,6 +121,35 @@ public class UIEVMUSDtLikeStoreController(
                     Value = s
                 }).ToArray()
         });
+    }
+
+    [HttpPost("{paymentMethodId}/addresses/delete-empty")]
+    public async Task<IActionResult> DeleteEmptyAddresses(string storeId, PaymentMethodId paymentMethodId)
+    {
+        if (!pluginConfiguration.EVMUSDtLikeConfigurationItems.ContainsKey(paymentMethodId))
+            return NotFound();
+
+        var store = StoreData;
+        var config = store.GetPaymentMethodConfig<EVMUSDtPaymentMethodConfig>(paymentMethodId, handlers);
+        if (config is null) return NotFound();
+
+        var addresses = config.Addresses ?? [];
+        var remaining = addresses.Where(address => !string.IsNullOrWhiteSpace(address)).ToArray();
+        if (remaining.Length != addresses.Length)
+        {
+            // Cleanup is explicit and must not change activation or payment settings.
+            config.Addresses = remaining;
+            store.SetPaymentMethodConfig(handlers[paymentMethodId], config);
+            await storeRepository.UpdateStore(store);
+            eventAggregator.Publish(new USDtSettingsChanged());
+            TempData.SetStatusMessageModel(new StatusMessageModel
+            {
+                Message = "Empty address entries were removed.",
+                Severity = StatusMessageModel.StatusSeverity.Success
+            });
+        }
+
+        return RedirectToAction(nameof(GetStoreEVMUSDtLikePaymentMethod), new { storeId, paymentMethodId });
     }
 
     [HttpPost("{paymentMethodId}/addresses/{address}/delete")]
