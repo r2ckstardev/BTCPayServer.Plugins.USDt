@@ -9,6 +9,7 @@ public class EditTronUSDtPaymentMethodViewModel
     [TronBase58]
     public string? Address { get; init; }
     public bool Enabled { get; init; }
+    public int EmptyAddressCount { get; init; }
     public bool ExcludeAmountFromPaymentLink { get; init; }
     public USDtPaymentLinkFormat PaymentLinkFormat { get; init; } = USDtPaymentLinkFormat.Standard;
     public string? PaymentLinkTemplate { get; init; }
