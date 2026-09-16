@@ -45,6 +45,7 @@ public class GreenfieldTronUSDtLikeStoreController(
             return NotFound();
 
         var addresses = (matchedPaymentMethodConfig.Addresses ?? [])
+            .Where(address => !string.IsNullOrWhiteSpace(address))
             .Distinct(StringComparer.Ordinal)
             .ToArray();
         var balances = await tronUSDtRpcProvider.GetBalances(paymentMethodId, addresses);

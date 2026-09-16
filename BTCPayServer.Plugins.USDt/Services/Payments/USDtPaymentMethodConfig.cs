@@ -36,7 +36,10 @@ public class USDtPaymentMethodConfig
         USDtTrackedInvoiceProvider trackedInvoiceProvider)
     {
         var allReservedAddresses = await GetReservedAddresses(paymentMethodId, trackedInvoiceProvider);
-        return (Addresses ?? []).Except(allReservedAddresses, AddressComparer).FirstOrDefault();
+        return (Addresses ?? [])
+            .Where(address => !string.IsNullOrWhiteSpace(address))
+            .Except(allReservedAddresses, AddressComparer)
+            .FirstOrDefault();
     }
 
     public static async Task<string[]> GetReservedAddresses(PaymentMethodId paymentMethodId,

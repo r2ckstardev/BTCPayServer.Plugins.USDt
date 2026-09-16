@@ -429,6 +429,35 @@ public class StorePaymentMethodFormTests
         Assert.Equal(0m, (decimal?)address["balance"]);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task TronApiOmitsBlankLegacyEntriesWithoutChangingStoredSettings(bool includeNonempty)
+    {
+        using var host = await FormHost.Create();
+        var validAddress = FormHost.Address("TRON");
+        string[] nonempty = includeNonempty ? [validAddress, validAddress, "invalid-address"] : [];
+        await host.SetAddresses("TRON", [null!, "", " \t\r\n", "\u00a0", .. nonempty]);
+        var before = await host.ReadStore();
+
+        var data = await host.GetTronInformation();
+        var addresses = Assert.IsType<JArray>(data["addresses"]);
+        if (includeNonempty)
+        {
+            Assert.Equal(new[] { validAddress, "invalid-address" }, addresses.Select(a => (string?)a["value"]));
+            Assert.Equal(0m, (decimal?)addresses[0]["balance"]);
+            Assert.Null((decimal?)addresses[1]["balance"]);
+        }
+        else
+        {
+            Assert.Empty(addresses);
+        }
+
+        var after = await host.ReadStore();
+        Assert.Equal(before.DerivationStrategies, after.DerivationStrategies);
+        Assert.Equal(before.StoreBlob, after.StoreBlob);
+    }
+
     private static IElement SaveForm(IHtmlDocument page) => page.QuerySelector("#SaveButton")!.Closest("form")!;
     private static async Task<IHtmlDocument> Parse(HttpResponseMessage response) =>
         await new HtmlParser().ParseDocumentAsync(await response.Content.ReadAsStringAsync());

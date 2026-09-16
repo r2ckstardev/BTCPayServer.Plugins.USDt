@@ -124,6 +124,59 @@ public class AddressPoolTests
         }
     }
 
+    [Theory]
+    [InlineData(true, null)]
+    [InlineData(false, null)]
+    [InlineData(true, "")]
+    [InlineData(false, "")]
+    [InlineData(true, " ")]
+    [InlineData(false, " ")]
+    [InlineData(true, "\t\r\n")]
+    [InlineData(false, "\t\r\n")]
+    [InlineData(true, "\u00a0")]
+    [InlineData(false, "\u00a0")]
+    public async Task AllocationSkipsBlankLegacyEntriesWithoutChangingThePool(bool evm, string? blank)
+    {
+        var paymentMethodId = new PaymentMethodId(evm ? "USDT-ETHEREUM" : "USDT-TRON");
+        var reservedAddress = evm ? EvmAddress : TronAddress;
+        var availableAddress = evm
+            ? "0x1111111111111111111111111111111111111111"
+            : "TXLAQ63Xg1NAzckPwKHvzw7CSEmLMEqcdj";
+        var invoice = new InvoiceEntity
+        {
+            Id = "reserved", Status = InvoiceStatus.New, MonitoringExpiration = DateTimeOffset.UtcNow.AddHours(1),
+            Currency = "USD", Price = 1m
+        };
+        invoice.SetPaymentPrompt(paymentMethodId, new PaymentPrompt
+            { Currency = "USDt", Destination = reservedAddress, Divisibility = 6 });
+        var provider = new USDtTrackedInvoiceProvider(new ReservedInvoice(invoice), TimeProvider.System);
+        USDtPaymentMethodConfig config = evm ? new EVMUSDtPaymentMethodConfig() : new TronUSDtPaymentMethodConfig();
+        var configuredReservedAddress = evm ? MixedCaseEvmAddress : reservedAddress;
+        string[] addresses = [blank!, configuredReservedAddress, blank!, availableAddress];
+        config.Addresses = addresses.ToArray();
+
+        Assert.Equal(availableAddress, await config.GetOneNotReservedAddress(paymentMethodId, provider));
+        Assert.Equal(addresses, config.Addresses);
+
+        config.Addresses = [blank!, configuredReservedAddress];
+        Assert.Null(await config.GetOneNotReservedAddress(paymentMethodId, provider));
+        config.Addresses = [blank!];
+        Assert.Null(await config.GetOneNotReservedAddress(paymentMethodId, provider));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AllocationReturnsUnavailableForMissingOrEmptyPool(bool evm)
+    {
+        var paymentMethodId = new PaymentMethodId(evm ? "USDT-ETHEREUM" : "USDT-TRON");
+        var provider = new USDtTrackedInvoiceProvider(new ReservedInvoice(new InvoiceEntity()), TimeProvider.System);
+        USDtPaymentMethodConfig config = evm ? new EVMUSDtPaymentMethodConfig() : new TronUSDtPaymentMethodConfig();
+        Assert.Null(await config.GetOneNotReservedAddress(paymentMethodId, provider));
+        config.Addresses = null!;
+        Assert.Null(await config.GetOneNotReservedAddress(paymentMethodId, provider));
+    }
+
     private static PaymentMethodConfigValidationContext ValidationContext(JToken addresses) =>
         new(null!, new ModelStateDictionary(), new JObject { ["addresses"] = addresses }, new ClaimsPrincipal(), null);
 
